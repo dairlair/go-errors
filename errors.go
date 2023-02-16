@@ -71,24 +71,28 @@ func Wrap(cause error, msg string, args ...interface{}) error {
 	return PopStack(errors.Wrapf(cause, msg, args...))
 }
 
-// @TODO
-// ancestorOfCause returns true if the caller looks to be an ancestor of the given stack
-// trace. We check this by seeing whether our stack prefix-matches the cause stack, which
-// should imply the error was generated directly from our goroutine.
+// The function returns 'true' if the calling function is an ancestor of the error stack trace.
+//
+// Determines whether the calling function is an ancestor of the provided stack trace.
+// The function achieves this by comparing the prefix of its own stack with the
+// stack of the cause, which suggests that the error was generated directly
+// from the calling goroutine. The function takes in an argument
+// 'ourStack', which is the stack trace of the
+// calling function, and 'causeStack', which is the stack trace of the error that needs to be checked.
 func ancestorOfCause(ourStack []uintptr, causeStack errors.StackTrace) bool {
-	// Stack traces are ordered such that the deepest frame is first. We'll want to check
-	// for prefix matching in reverse.
+	// stack traces are organized in reverse order, with the deepest frame appearing first. Therefore, when checking for prefix matches, it is necessary to perform the comparison in reverse.
 	//
-	// As an example, imagine we have a prefix-matching stack for ourselves:
+	// E.g.:, consider the scenario where there exists a stack trace that
+	// matches the prefix of the function. This can be illustrated by way of an example.:
 	// [
 	//   "github.com/onsi/ginkgo/internal/leafnodes.(*runner).runSync",
-	//   "github.com/incident-io/core/server/pkg/errors_test.TestSuite",
+	//   "github.com/dairlair/go-errors/go_errors_suite_test.TestSuite",
 	//   "testing.tRunner",
 	//   "runtime.goexit"
 	// ]
 	//
-	// We'll want to compare this against an error cause that will have happened further
-	// down the stack. An example stack trace from such an error might be:
+	// It may be necessary to compare the function's own stack trace against an error
+	// cause that has occurred further down the stack. To demonstrate this, an example stack trace from such an error is provided.
 	// [
 	//   "github.com/incident-io/core/server/pkg/errors.New",
 	//   "github.com/incident-io/core/server/pkg/errors_test.glob..func1.2.2.2.1",,
@@ -98,36 +102,44 @@ func ancestorOfCause(ourStack []uintptr, causeStack errors.StackTrace) bool {
 	//   "runtime.goexit"
 	// ]
 	//
-	// They prefix match, but we'll have to handle the match carefully as we need to match
-	// from back to forward.
+	// A prefix match has been identified between two elements that need to be compared.
+	// However, it is important to handle the match with caution since the comparison
+	// should be performed from the back of the stack trace to the front, as we mentioned above,
 
-	// We can't possibly prefix match if our stack is larger than the cause stack.
+	// it is impossible to find a prefix match if the stack trace of the calling function
+	// is longer than the stack trace of the error cause.
+	// Therefore, if the length of the calling function's stack trace 'ourStack'
+	// is greater than the stack trace of the error cause 'causeStack',
+	// the function we return false.
 	if len(ourStack) > len(causeStack) {
 		return false
 	}
 
-	// We know the sizes are compatible, so compare program counters from back to front.
+	// Sizes of the elements being compared are compatible, it is safe to compare
+	// program counters from back to front.
 	for idx := 0; idx < len(ourStack); idx++ {
 		if ourStack[len(ourStack)-1] != (uintptr)(causeStack[len(causeStack)-1]) {
 			return false
 		}
 	}
 
-	// All comparisons checked out, these stacks match
+	// Stacks are equal, Viva la igualdad!
 	return true
 }
 
 func callers(skip int) []uintptr {
-	pc := make([]uintptr, 32)        // assume we'll have at most 32 frames
+	pc := make([]uintptr, 32)        // expect a maximum of 32 levels of function call hierarchy
 	n := runtime.Callers(skip+3, pc) // capture those frames, skipping runtime.Callers, ourself and the calling function
 
-	return pc[:n] // return everything that we captured
+	return pc[:n] // return captured frames
 }
 
-// RecoverPanic turns a panic into an error, adjusting the stacktrace so it originates at
-// the line that caused it.
+// RecoverPanic  designed to transform a panic event into an error.
 //
-// Example:
+// Additionally, the function modifies the stack trace of the error such
+// that it appears to have originated from the specific line of code that triggered the panic event.
+//
+// E.G.:
 //
 //	func Do() (err error) {
 //	  defer func() {
@@ -145,9 +157,12 @@ func RecoverPanic(r interface{}, errPtr *error) {
 	}
 
 	if err != nil {
-		// Pop twice: once for the errors package, then again for the defer function we must
-		// run this under. We want the stacktrace to originate at the source of the panic, not
-		// in the infrastructure that catches it.
+		// Two pop operations are necessary within the function in order to remove the relevant stack frames.
+		// The first pop is needed to remove the 'errors' package,
+		// while the second pop is required to remove the defer function that encapsulates
+		// the error handling infrastructure.
+		// The goal of these 'pop' operations is to adjust the stack trace so that it originates
+		// from the line of code that triggered the panic event, rather than the error handling code.
 		err = PopStack(err) // errors.go
 		err = PopStack(err) // defer
 
@@ -155,25 +170,25 @@ func RecoverPanic(r interface{}, errPtr *error) {
 	}
 }
 
-// PopStack removes the top of the stack from an errors stack trace.
+// PopStack used to remove the top element from a stack trace.
 func PopStack(err error) error {
 	if err == nil {
 		return err
 	}
 
-	// We want to remove us, the internal/errors.New function, from the error stack we just
-	// produced. There's no official way of reaching into the error and adjusting this, as
-	// the stack is stored as a private field on an unexported struct.
+	// We need to remove the 'errors.New' function from a newly created error stack. However,
+	// there is no public method for modifying the error stack, as it is stored as a
+	// private field within an unexported struct.
 	//
-	// This does some unsafe badness to adjust that field, which should not be repeated
-	// anywhere else.
+	// To solve this problem, the function employs an unsafe operation to modify
+	// the stack field, which is not recommended and should not be replicated elsewhere in the program.
 	stackField := reflect.ValueOf(err).Elem().FieldByName("stack")
 	if stackField.IsZero() {
 		return err
 	}
 	stackFieldPtr := (**[]uintptr)(unsafe.Pointer(stackField.UnsafeAddr()))
 
-	// Remove the first of the frames, dropping 'us' from the error stack trace.
+	// Remove the first frame from a stack trace, effectively eliminating the element associated with 'us' from the error stack.
 	frames := (**stackFieldPtr)[1:]
 
 	// Assign to the internal stack field
